@@ -37,19 +37,36 @@ def _require_secrets():
         )
         st.stop()
 
-def _drive_enabled() -> tuple[bool, str]:
-    """Returnerar (enabled, folder_id)."""
+def _validate_service_account(creds_dict) -> tuple[bool, str]:
+    if not isinstance(creds_dict, dict):
+        return False, "gcp_service_account har fel format (ska vara en TOML-sektion)."
+    required = ["type", "project_id", "private_key", "client_email"]
+    missing = [k for k in required if not str(creds_dict.get(k, "")).strip()]
+    if missing:
+        return False, "gcp_service_account saknar värden: " + ", ".join(missing)
+    return True, ""
+
+def _drive_status() -> tuple[bool, str, str]:
+    """Returnerar (enabled, folder_id, reason_if_disabled)."""
     try:
+        if "gcp_service_account" not in st.secrets and "drive_folder_id" not in st.secrets:
+            return False, "", "Saknar secrets (gcp_service_account + drive_folder_id)."
         if "gcp_service_account" not in st.secrets:
-            return False, ""
+            return False, "", "Saknar secret: gcp_service_account"
         if "drive_folder_id" not in st.secrets:
-            return False, ""
+            return False, "", "Saknar secret: drive_folder_id"
+
         folder_id = _extract_drive_folder_id(st.secrets.get("drive_folder_id", ""))
         if not folder_id:
-            return False, ""
-        return True, folder_id
-    except Exception:
-        return False, ""
+            return False, "", "drive_folder_id är tomt."
+
+        ok, reason = _validate_service_account(st.secrets.get("gcp_service_account"))
+        if not ok:
+            return False, "", reason
+
+        return True, folder_id, ""
+    except Exception as e:
+        return False, "", f"Kunde inte läsa secrets: {e}"
 
 def get_drive_service():
     # Hämtar credentials från st.secrets
@@ -129,7 +146,7 @@ DB_FILENAME = "semester_databas.json"
 
 st.set_page_config(page_title="Semesterplaneraren (Drive Sync)", layout="wide")
 
-drive_enabled, _folder_id = _drive_enabled()
+drive_enabled, _folder_id, drive_disabled_reason = _drive_status()
 
 # --- LOGIK-KLASS (Samma som förut) ---
 class VacationEngine:
@@ -195,7 +212,8 @@ def save_all_changes():
     """Wrapper för att spara och visa status"""
     if not drive_enabled:
         st.warning(
-            "Drive-sync är inte aktiverad (saknar secrets). \n\n"
+            "Drive-sync är inte aktiverad.\n\n"
+            f"Orsak: {drive_disabled_reason}\n\n"
             "Lokalt: fyll i .streamlit/secrets.toml (se .streamlit/secrets.toml.example).\n"
             "Streamlit Cloud: App → Settings → Secrets."
         )
@@ -212,7 +230,15 @@ with st.sidebar:
     if drive_enabled:
         st.success("Drive-sync: Aktiv")
     else:
-        st.warning("Drive-sync: Inaktiv (saknar secrets)")
+        st.warning("Drive-sync: Inaktiv")
+        st.caption(f"Orsak: {drive_disabled_reason}")
+        with st.expander("Felsök secrets (visar bara nyckelnamn)"):
+            st.write("Förväntade nycklar: drive_folder_id, gcp_service_account")
+            st.write("Nycklar som Streamlit ser:")
+            try:
+                st.code("\n".join(sorted(list(st.secrets.keys()))))
+            except Exception as e:
+                st.write(f"Kunde inte lista nycklar: {e}")
     
     # Spara-knapp
     if st.button("☁️ Spara nu", type="primary", disabled=not drive_enabled):
