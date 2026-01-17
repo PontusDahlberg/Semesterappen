@@ -5,6 +5,7 @@ import datetime
 import plotly.express as px
 import json
 import re
+from collections.abc import Mapping
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -29,8 +30,8 @@ def _coerce_service_account_info(value) -> tuple[dict | None, str]:
     - en dict (när användaren använder [gcp_service_account] ...)
     - en sträng (om man råkat skriva gcp_service_account = "..." eller klistrat in JSON som sträng)
     """
-    if isinstance(value, dict):
-        return value, ""
+    if isinstance(value, Mapping):
+        return dict(value), ""
     if isinstance(value, str):
         s = value.strip()
         if not s:
@@ -194,6 +195,9 @@ else:
             st.code("\n".join(sorted(list(st.secrets.keys()))))
             gcp_val = st.secrets.get("gcp_service_account", None)
             st.write(f"Typ av gcp_service_account: {type(gcp_val).__name__}")
+            if isinstance(gcp_val, Mapping):
+                st.write("gcp_service_account subkeys:")
+                st.code("\n".join(sorted(list(gcp_val.keys()))))
             drive_val = st.secrets.get("drive_folder_id", None)
             st.write(f"Typ av drive_folder_id: {type(drive_val).__name__}")
         except Exception as e:
