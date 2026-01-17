@@ -135,6 +135,73 @@ def _drive_status() -> tuple[bool, str, str]:
     except Exception as e:
         return False, "", f"Kunde inte läsa secrets: {e}"
 
+def _oauth_redirect_uri(client_dict: dict) -> str:
+    redirect_uri = str(st.secrets.get("oauth_redirect_uri", "")).strip()
+    if redirect_uri:
+        return redirect_uri
+    if client_dict.get("redirect_uri"):
+        return str(client_dict.get("redirect_uri")).strip()
+    if client_dict.get("redirect_uris"):
+        uris = client_dict.get("redirect_uris")
+        if isinstance(uris, list) and uris:
+            return str(uris[0]).strip()
+    return ""
+
+def _build_oauth_flow() -> tuple[Flow, str]:
+    client_dict, err = _coerce_oauth_client_info(st.secrets.get("gcp_oauth_client"))
+    if err or not client_dict:
+        st.error("gcp_oauth_client har fel format i secrets.")
+        st.stop()
+
+    redirect_uri = _oauth_redirect_uri(client_dict)
+    if not redirect_uri:
+        st.error(
+            "Saknar oauth_redirect_uri i secrets.\n\n"
+            "Lägg till t.ex. oauth_redirect_uri = 'https://DIN-APP.streamlit.app'"
+        )
+        st.stop()
+
+    client_config = {
+        "web": {
+            "client_id": client_dict.get("client_id"),
+            "client_secret": client_dict.get("client_secret"),
+            "auth_uri": client_dict.get("auth_uri"),
+            "token_uri": client_dict.get("token_uri"),
+            "redirect_uris": [redirect_uri],
+        }
+    }
+    flow = Flow.from_client_config(client_config, scopes=SCOPES)
+    flow.redirect_uri = redirect_uri
+    return flow, redirect_uri
+
+def _get_oauth_credentials() -> Credentials:
+    if "oauth_creds_json" in st.session_state:
+        info = json.loads(st.session_state["oauth_creds_json"])
+        creds = Credentials.from_authorized_user_info(info, SCOPES)
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            st.session_state["oauth_creds_json"] = creds.to_json()
+        return creds
+
+    params = st.experimental_get_query_params()
+    if "code" in params:
+        flow, _ = _build_oauth_flow()
+        flow.fetch_token(code=params["code"][0])
+        creds = flow.credentials
+        st.session_state["oauth_creds_json"] = creds.to_json()
+        st.experimental_set_query_params()
+        return creds
+
+    flow, _ = _build_oauth_flow()
+    auth_url, _state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    st.info("Logga in med Google för att aktivera Drive‑sync (OAuth).")
+    st.link_button("Logga in med Google", auth_url)
+    st.stop()
+
 def get_drive_service():
     # Hämtar credentials från st.secrets
     if _oauth_enabled():
