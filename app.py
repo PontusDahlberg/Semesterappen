@@ -182,6 +182,23 @@ st.set_page_config(page_title="Semesterplaneraren (Drive Sync)", layout="wide")
 
 drive_enabled, _folder_id, drive_disabled_reason = _drive_status()
 
+# Visa status även i huvudvyn (för att underlätta när sidomenyn är stängd)
+if drive_enabled:
+    st.success("Drive-sync: Aktiv")
+else:
+    st.warning("Drive-sync: Inaktiv")
+    st.caption(f"Orsak: {drive_disabled_reason}")
+    with st.expander("Felsök secrets (visar bara nyckelnamn)"):
+        st.write("Förväntade nycklar: drive_folder_id, gcp_service_account")
+        try:
+            st.code("\n".join(sorted(list(st.secrets.keys()))))
+            gcp_val = st.secrets.get("gcp_service_account", None)
+            st.write(f"Typ av gcp_service_account: {type(gcp_val).__name__}")
+            drive_val = st.secrets.get("drive_folder_id", None)
+            st.write(f"Typ av drive_folder_id: {type(drive_val).__name__}")
+        except Exception as e:
+            st.write(f"Kunde inte läsa secrets: {e}")
+
 # --- LOGIK-KLASS (Samma som förut) ---
 class VacationEngine:
     def __init__(self):
