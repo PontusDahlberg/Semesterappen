@@ -2,6 +2,10 @@
 
 Streamlit-app för semesterplanering med lagring i Google Drive (JSON i en delad mapp).
 
+## Roadmap
+
+Se [ROADMAP.md](ROADMAP.md) för planen mot en publik app (auth + betaltiers).
+
 ## Lokalt (Windows)
 
 1. Skapa virtuell miljö
