@@ -7,6 +7,9 @@ import json
 import re
 from collections.abc import Mapping
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
@@ -47,6 +50,24 @@ def _coerce_service_account_info(value) -> tuple[dict | None, str]:
         return parsed, ""
     return None, "gcp_service_account har fel format (ska vara en TOML-sektion)."
 
+def _coerce_oauth_client_info(value) -> tuple[dict | None, str]:
+    if isinstance(value, Mapping):
+        return dict(value), ""
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None, "gcp_oauth_client är tomt."
+        try:
+            parsed = json.loads(s)
+        except Exception:
+            return None, (
+                "gcp_oauth_client har fel format (ska vara en TOML-sektion eller en JSON-sträng)."
+            )
+        if not isinstance(parsed, dict):
+            return None, "gcp_oauth_client har fel format (JSON måste vara ett objekt)."
+        return parsed, ""
+    return None, "gcp_oauth_client har fel format (ska vara en TOML-sektion)."
+
 def _require_secrets():
     missing = []
     if "gcp_service_account" not in st.secrets:
@@ -74,13 +95,24 @@ def _validate_service_account(creds_dict) -> tuple[bool, str]:
         return False, "gcp_service_account saknar värden: " + ", ".join(missing)
     return True, ""
 
+def _validate_oauth_client(client_dict) -> tuple[bool, str]:
+    client_dict, err = _coerce_oauth_client_info(client_dict)
+    if err:
+        return False, err
+    if not isinstance(client_dict, dict):
+        return False, "gcp_oauth_client har fel format (ska vara en TOML-sektion)."
+    required = ["client_id", "client_secret", "auth_uri", "token_uri"]
+    missing = [k for k in required if not str(client_dict.get(k, "")).strip()]
+    if missing:
+        return False, "gcp_oauth_client saknar värden: " + ", ".join(missing)
+    return True, ""
+
+def _oauth_enabled() -> bool:
+    return "gcp_oauth_client" in st.secrets
+
 def _drive_status() -> tuple[bool, str, str]:
     """Returnerar (enabled, folder_id, reason_if_disabled)."""
     try:
-        if "gcp_service_account" not in st.secrets and "drive_folder_id" not in st.secrets:
-            return False, "", "Saknar secrets (gcp_service_account + drive_folder_id)."
-        if "gcp_service_account" not in st.secrets:
-            return False, "", "Saknar secret: gcp_service_account"
         if "drive_folder_id" not in st.secrets:
             return False, "", "Saknar secret: drive_folder_id"
 
@@ -88,9 +120,16 @@ def _drive_status() -> tuple[bool, str, str]:
         if not folder_id:
             return False, "", "drive_folder_id är tomt."
 
-        ok, reason = _validate_service_account(st.secrets.get("gcp_service_account"))
-        if not ok:
-            return False, "", reason
+        if _oauth_enabled():
+            ok, reason = _validate_oauth_client(st.secrets.get("gcp_oauth_client"))
+            if not ok:
+                return False, "", reason
+        else:
+            if "gcp_service_account" not in st.secrets:
+                return False, "", "Saknar secret: gcp_service_account"
+            ok, reason = _validate_service_account(st.secrets.get("gcp_service_account"))
+            if not ok:
+                return False, "", reason
 
         return True, folder_id, ""
     except Exception as e:
@@ -198,6 +237,12 @@ else:
             if isinstance(gcp_val, Mapping):
                 st.write("gcp_service_account subkeys:")
                 st.code("\n".join(sorted(list(gcp_val.keys()))))
+            oauth_val = st.secrets.get("gcp_oauth_client", None)
+            if oauth_val is not None:
+                st.write(f"Typ av gcp_oauth_client: {type(oauth_val).__name__}")
+                if isinstance(oauth_val, Mapping):
+                    st.write("gcp_oauth_client subkeys:")
+                    st.code("\n".join(sorted(list(oauth_val.keys()))))
             drive_val = st.secrets.get("drive_folder_id", None)
             st.write(f"Typ av drive_folder_id: {type(drive_val).__name__}")
         except Exception as e:

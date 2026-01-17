@@ -40,6 +40,15 @@ streamlit run app.py
 3. I Streamlit Cloud: App → Settings → Secrets
    - Klistra in innehållet (samma format som i `.streamlit/secrets.toml.example`)
 
+### OAuth (rekommenderas för Drive‑lagring)
+
+Service accounts har ingen egen lagringskvota i "My Drive". För att spara i ditt Google Drive‑konto:
+
+1. Skapa en OAuth Client (Web application) i Google Cloud Console
+2. Lägg in client‑uppgifterna i `[gcp_oauth_client]` i secrets
+3. Lägg till `oauth_redirect_uri` (din Streamlit‑app URL) i secrets
+4. I Google Cloud Console: lägg samma redirect URI under **Authorized redirect URIs**
+
 Tips: om Streamlit säger att formatet är fel kan du validera lokalt (utan att skriva ut hemligheter):
 
 ```powershell
