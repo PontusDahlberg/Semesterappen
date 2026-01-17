@@ -139,6 +139,9 @@ def _oauth_redirect_uri(client_dict: dict) -> str:
     redirect_uri = str(st.secrets.get("oauth_redirect_uri", "")).strip()
     if redirect_uri:
         return redirect_uri
+    # Also allow it inside the gcp_oauth_client section
+    if client_dict.get("oauth_redirect_uri"):
+        return str(client_dict.get("oauth_redirect_uri")).strip()
     if client_dict.get("redirect_uri"):
         return str(client_dict.get("redirect_uri")).strip()
     if client_dict.get("redirect_uris"):
