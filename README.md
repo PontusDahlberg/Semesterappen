@@ -40,6 +40,12 @@ streamlit run app.py
 3. I Streamlit Cloud: App → Settings → Secrets
    - Klistra in innehållet (samma format som i `.streamlit/secrets.toml.example`)
 
+Tips: om Streamlit säger att formatet är fel kan du validera lokalt (utan att skriva ut hemligheter):
+
+```powershell
+python validate_secrets.py .streamlit\secrets.toml
+```
+
 ## Viktigt om hemligheter
 
 - `.streamlit/secrets.toml` är ignorerad via `.gitignore` och ska aldrig committas.
