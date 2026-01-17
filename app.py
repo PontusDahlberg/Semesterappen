@@ -609,9 +609,6 @@ with left:
 
     month_df = df[(pd.to_datetime(df["Datum"]).dt.year == year) & (pd.to_datetime(df["Datum"]).dt.month == month)].copy()
     editor_key = f"editor_{st.session_state['current_scenario']}_{year}_{month}"
-    if editor_key not in st.session_state:
-        st.session_state[editor_key] = month_df
-
     edited_df = st.data_editor(
         month_df,
         column_config={
