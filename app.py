@@ -423,6 +423,7 @@ class VacationEngine:
                     "Beskrivning": details,
                     "Semester": False,
                     "ExtraLedig": False,
+                    "Sjuk": False,
                 }
             )
         return pd.DataFrame(data)
@@ -572,6 +573,8 @@ if scenario_key not in st.session_state["data_store"]:
     df_init["Datum"] = pd.to_datetime(df_init["Datum"]).dt.date
     if "ExtraLedig" not in df_init.columns:
         df_init["ExtraLedig"] = False
+    if "Sjuk" not in df_init.columns:
+        df_init["Sjuk"] = False
     st.session_state["data_store"][scenario_key] = df_init
 
 df = st.session_state["data_store"][scenario_key]
@@ -613,8 +616,9 @@ def _apply_month_edits(editor_key: str, year: int, month: int) -> None:
 
     month_df["Datum"] = pd.to_datetime(month_df["Datum"]).dt.date
     month_df.loc[month_df["ExtraLedig"] == True, "Semester"] = False
-    updated.loc[mask, ["Semester", "ExtraLedig", "Beskrivning"]] = month_df[
-        ["Semester", "ExtraLedig", "Beskrivning"]
+    month_df.loc[month_df["Sjuk"] == True, "Semester"] = False
+    updated.loc[mask, ["Semester", "ExtraLedig", "Sjuk", "Beskrivning"]] = month_df[
+        ["Semester", "ExtraLedig", "Sjuk", "Beskrivning"]
     ].values
     _sync_df_to_scenarios(updated)
 
@@ -630,6 +634,11 @@ left, right = st.columns([2, 3])
 
 with left:
     st.subheader("Lista")
+    today = datetime.date.today()
+    if st.button("Idag", key="jump_today"):
+        st.session_state["month_year"] = 2026 if today.year < 2026 else (2027 if today.year > 2027 else today.year)
+        st.session_state["month_select"] = today.month
+        st.rerun()
     year = st.selectbox("År", [2026, 2027], index=0, key="month_year")
     month = st.selectbox(
         "Månad",
@@ -643,10 +652,11 @@ with left:
     with period_col1:
         start_date = st.date_input("Från och med", value=datetime.date(year, month, 1), key="period_start")
     with period_col2:
-        end_date = st.date_input("Till och med", value=datetime.date(year, month, 1), key="period_end")
+        default_end = start_date + datetime.timedelta(days=1)
+        end_date = st.date_input("Till och med", value=default_end, key="period_end")
     period_action = st.selectbox(
         "Åtgärd",
-        ["Markera semester", "Ta bort semester"],
+        ["Markera semester", "Ta bort semesterperiod"],
         key="period_action",
     )
     if st.button("Applicera period", key="apply_period"):
@@ -657,10 +667,14 @@ with left:
             mask = (updated["Datum"] >= start_date) & (updated["Datum"] <= end_date)
             workday_mask = updated["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"])
             if period_action == "Markera semester":
-                updated.loc[mask & workday_mask & (updated["ExtraLedig"] != True), "Semester"] = True
+                updated.loc[
+                    mask & workday_mask & (updated["ExtraLedig"] != True) & (updated["Sjuk"] != True),
+                    "Semester",
+                ] = True
             else:
                 updated.loc[mask & workday_mask, "Semester"] = False
             updated.loc[mask & (updated["ExtraLedig"] == True), "Semester"] = False
+            updated.loc[mask & (updated["Sjuk"] == True), "Semester"] = False
             _sync_df_to_scenarios(updated)
             df = updated
 
@@ -674,6 +688,7 @@ with left:
             "Typ": st.column_config.TextColumn("Typ", width="small"),
             "Semester": st.column_config.CheckboxColumn("Sem", width="small"),
             "ExtraLedig": st.column_config.CheckboxColumn("Ledig", width="small"),
+            "Sjuk": st.column_config.CheckboxColumn("Sjuk", width="small"),
             "Beskrivning": st.column_config.TextColumn("Notering", width="small"),
         },
         disabled=["Datum", "Vecka", "Typ"],
@@ -709,6 +724,7 @@ with right:
             typ = str(info["Typ"]) if info is not None else ""
             is_semester = bool(info["Semester"]) if info is not None else False
             is_extra_ledig = bool(info.get("ExtraLedig", False)) if info is not None else False
+            is_sick = bool(info.get("Sjuk", False)) if info is not None else False
             holiday_name = str(info.get("Beskrivning", "")).strip() if info is not None else ""
             if day in engine.se_holidays:
                 holiday_name = str(engine.se_holidays.get(day)).strip()
@@ -722,6 +738,9 @@ with right:
                 if holiday_name:
                     short_name = _shorten_holiday_name(holiday_name)
                     label += f" {short_name}"
+            elif is_sick:
+                status = "sjuk"
+                label += " 🤒"
             elif is_extra_ledig:
                 status = "ledig"
                 label += " 🏖️"
@@ -747,6 +766,7 @@ with right:
             colors = {
                 "semester": "#D5F5E3",
                 "helg": "#FADBD8",
+                "sjuk": "#F9E79F",
                 "ledig": "#D6EAF8",
                 "spärr": "#E5E7E9",
                 "text": "#111111",
@@ -756,6 +776,7 @@ with right:
             colors = {
                 "semester": "#1E8449",
                 "helg": "#922B21",
+                "sjuk": "#7D6608",
                 "ledig": "#21618C",
                 "spärr": "#424949",
                 "text": "#F2F4F4",
@@ -768,6 +789,8 @@ with right:
                     styles.iat[i, j] = f"background-color: {colors['semester']}; color: {colors['text']}; font-weight: 600;"
                 elif status == "helg":
                     styles.iat[i, j] = f"background-color: {colors['helg']}; color: {colors['text']};"
+                elif status == "sjuk":
+                    styles.iat[i, j] = f"background-color: {colors['sjuk']}; color: {colors['text']};"
                 elif status == "ledig":
                     styles.iat[i, j] = f"background-color: {colors['ledig']}; color: {colors['text']};"
                 elif status == "spärr":
@@ -777,7 +800,7 @@ with right:
         return styles
 
     st.dataframe(cal_df.style.apply(_style_calendar, axis=None), use_container_width=True, height=240)
-    st.caption("Legend: 🌴 semester (arbetsdag), 🎉 helg/röd dag, 🏖️ ledig (ej semester), ⛔ spärrad fredag.")
+    st.caption("Legend: 🌴 semester (arbetsdag), 🎉 helg/röd dag, 🤒 sjuk, 🏖️ ledig (ej semester), ⛔ spärrad fredag.")
 
 with st.expander("Årsöversikt 2026–2027"):
     df_calc = df.copy()
@@ -816,9 +839,13 @@ viz_df["Kategori"] = viz_df.apply(
     lambda r: "Semester"
     if r["Semester"]
     else (
-        "Ledig (egen)"
-        if r.get("ExtraLedig", False)
-        else ("Helg" if "Ledig" in r["Typ"] else ("Spärrad" if "Spärrad" in r["Typ"] else "Jobb"))
+        "Sjuk"
+        if r.get("Sjuk", False)
+        else (
+            "Ledig (egen)"
+            if r.get("ExtraLedig", False)
+            else ("Helg" if "Ledig" in r["Typ"] else ("Spärrad" if "Spärrad" in r["Typ"] else "Jobb"))
+        )
     ),
     axis=1,
 )
@@ -836,6 +863,7 @@ if not events.empty:
             "Helg": "#E74C3C",
             "Spärrad": "#95A5A6",
             "Ledig (egen)": "#3498DB",
+            "Sjuk": "#F1C40F",
         },
     )
     fig.update_layout(xaxis_range=[START_DATE, END_DATE], height=300)
