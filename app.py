@@ -137,8 +137,18 @@ def _drive_status() -> tuple[bool, str, str]:
 
 def get_drive_service():
     # Hämtar credentials från st.secrets
+    if _oauth_enabled():
+        creds = _get_oauth_credentials()
+        return build('drive', 'v3', credentials=creds)
+
     _require_secrets()
-    creds_dict, err = _coerce_service_account_info(st.secrets["gcp_service_account"])
+    if "gcp_service_account" not in st.secrets:
+        st.error(
+            "Saknar gcp_service_account.\n\n"
+            "Om du använder OAuth, lägg in [gcp_oauth_client] i secrets."
+        )
+        st.stop()
+    creds_dict, err = _coerce_service_account_info(st.secrets.get("gcp_service_account"))
     if err or not creds_dict:
         st.error(
             "gcp_service_account har fel format.\n\n"
@@ -229,7 +239,7 @@ else:
     st.warning("Drive-sync: Inaktiv")
     st.caption(f"Orsak: {drive_disabled_reason}")
     with st.expander("Felsök secrets (visar bara nyckelnamn)"):
-        st.write("Förväntade nycklar: drive_folder_id, gcp_service_account")
+        st.write("Förväntade nycklar: drive_folder_id, gcp_oauth_client (eller gcp_service_account)")
         try:
             st.code("\n".join(sorted(list(st.secrets.keys()))))
             gcp_val = st.secrets.get("gcp_service_account", None)
@@ -333,7 +343,7 @@ with st.sidebar:
         st.warning("Drive-sync: Inaktiv")
         st.caption(f"Orsak: {drive_disabled_reason}")
         with st.expander("Felsök secrets (visar bara nyckelnamn)"):
-            st.write("Förväntade nycklar: drive_folder_id, gcp_service_account")
+            st.write("Förväntade nycklar: drive_folder_id, gcp_oauth_client (eller gcp_service_account)")
             st.write("Nycklar som Streamlit ser:")
             try:
                 st.code("\n".join(sorted(list(st.secrets.keys()))))
