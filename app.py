@@ -22,6 +22,30 @@ def _extract_drive_folder_id(value: str) -> str:
         return m.group(1)
     return value
 
+def _coerce_service_account_info(value) -> tuple[dict | None, str]:
+    """Returnerar (dict, error_message).
+
+    Streamlit Secrets kan ge oss antingen:
+    - en dict (när användaren använder [gcp_service_account] ...)
+    - en sträng (om man råkat skriva gcp_service_account = "..." eller klistrat in JSON som sträng)
+    """
+    if isinstance(value, dict):
+        return value, ""
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None, "gcp_service_account är tomt."
+        try:
+            parsed = json.loads(s)
+        except Exception:
+            return None, (
+                "gcp_service_account har fel format (ska vara en TOML-sektion eller en JSON-sträng)."
+            )
+        if not isinstance(parsed, dict):
+            return None, "gcp_service_account har fel format (JSON måste vara ett objekt)."
+        return parsed, ""
+    return None, "gcp_service_account har fel format (ska vara en TOML-sektion)."
+
 def _require_secrets():
     missing = []
     if "gcp_service_account" not in st.secrets:
@@ -38,6 +62,9 @@ def _require_secrets():
         st.stop()
 
 def _validate_service_account(creds_dict) -> tuple[bool, str]:
+    creds_dict, err = _coerce_service_account_info(creds_dict)
+    if err:
+        return False, err
     if not isinstance(creds_dict, dict):
         return False, "gcp_service_account har fel format (ska vara en TOML-sektion)."
     required = ["type", "project_id", "private_key", "client_email"]
@@ -71,7 +98,14 @@ def _drive_status() -> tuple[bool, str, str]:
 def get_drive_service():
     # Hämtar credentials från st.secrets
     _require_secrets()
-    creds_dict = st.secrets["gcp_service_account"]
+    creds_dict, err = _coerce_service_account_info(st.secrets["gcp_service_account"])
+    if err or not creds_dict:
+        st.error(
+            "gcp_service_account har fel format.\n\n"
+            "I Streamlit Secrets ska det se ut som en TOML-sektion: [gcp_service_account] ...\n"
+            "(alternativt en JSON-sträng)."
+        )
+        st.stop()
     creds = service_account.Credentials.from_service_account_info(
         creds_dict, scopes=SCOPES
     )
@@ -237,6 +271,10 @@ with st.sidebar:
             st.write("Nycklar som Streamlit ser:")
             try:
                 st.code("\n".join(sorted(list(st.secrets.keys()))))
+                gcp_val = st.secrets.get("gcp_service_account", None)
+                st.write(f"Typ av gcp_service_account: {type(gcp_val).__name__}")
+                drive_val = st.secrets.get("drive_folder_id", None)
+                st.write(f"Typ av drive_folder_id: {type(drive_val).__name__}")
             except Exception as e:
                 st.write(f"Kunde inte lista nycklar: {e}")
     
