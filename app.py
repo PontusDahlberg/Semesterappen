@@ -70,10 +70,10 @@ def _coerce_oauth_client_info(value) -> tuple[dict | None, str]:
 
 def _require_secrets():
     missing = []
-    if "gcp_service_account" not in st.secrets:
-        missing.append("gcp_service_account")
     if "drive_folder_id" not in st.secrets:
         missing.append("drive_folder_id")
+    if "gcp_oauth_client" not in st.secrets and "gcp_service_account" not in st.secrets:
+        missing.append("gcp_oauth_client (eller gcp_service_account)")
     if missing:
         st.error(
             "Saknar secrets: " + ", ".join(missing) + "\n\n"
