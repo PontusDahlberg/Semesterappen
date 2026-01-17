@@ -6,6 +6,7 @@ import plotly.express as px
 import json
 import re
 import calendar
+import os
 from collections.abc import Mapping
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
@@ -133,6 +134,35 @@ def _oauth_enabled() -> bool:
     return "gcp_oauth_client" in st.secrets
 
 
+def _oauth_cache_path() -> str:
+    return os.path.join(".streamlit", "oauth_creds.json")
+
+
+def _load_cached_oauth_creds() -> Credentials | None:
+    path = _oauth_cache_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        creds = Credentials.from_authorized_user_info(info, SCOPES)
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            _save_cached_oauth_creds(creds)
+        return creds
+    except Exception:
+        return None
+
+
+def _save_cached_oauth_creds(creds: Credentials) -> None:
+    try:
+        os.makedirs(".streamlit", exist_ok=True)
+        with open(_oauth_cache_path(), "w", encoding="utf-8") as f:
+            f.write(creds.to_json())
+    except Exception:
+        return
+
+
 def _drive_status() -> tuple[bool, str, str]:
     """Returnerar (enabled, folder_id, reason_if_disabled)."""
     try:
@@ -203,12 +233,17 @@ def _build_oauth_flow() -> tuple[Flow, str]:
 
 
 def _get_oauth_credentials() -> Credentials:
+    cached = _load_cached_oauth_creds()
+    if cached:
+        return cached
+
     if "oauth_creds_json" in st.session_state:
         info = json.loads(st.session_state["oauth_creds_json"])
         creds = Credentials.from_authorized_user_info(info, SCOPES)
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
             st.session_state["oauth_creds_json"] = creds.to_json()
+            _save_cached_oauth_creds(creds)
         return creds
 
     params = st.experimental_get_query_params()
@@ -217,6 +252,7 @@ def _get_oauth_credentials() -> Credentials:
         flow.fetch_token(code=params["code"][0])
         creds = flow.credentials
         st.session_state["oauth_creds_json"] = creds.to_json()
+        _save_cached_oauth_creds(creds)
         st.experimental_set_query_params()
         return creds
 
