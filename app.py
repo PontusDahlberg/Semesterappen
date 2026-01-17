@@ -612,6 +612,7 @@ def _apply_month_edits(editor_key: str, year: int, month: int) -> None:
         return
 
     month_df["Datum"] = pd.to_datetime(month_df["Datum"]).dt.date
+    month_df.loc[month_df["ExtraLedig"] == True, "Semester"] = False
     updated.loc[mask, ["Semester", "ExtraLedig", "Beskrivning"]] = month_df[
         ["Semester", "ExtraLedig", "Beskrivning"]
     ].values
@@ -656,9 +657,10 @@ with left:
             mask = (updated["Datum"] >= start_date) & (updated["Datum"] <= end_date)
             workday_mask = updated["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"])
             if period_action == "Markera semester":
-                updated.loc[mask & workday_mask, "Semester"] = True
+                updated.loc[mask & workday_mask & (updated["ExtraLedig"] != True), "Semester"] = True
             else:
                 updated.loc[mask & workday_mask, "Semester"] = False
+            updated.loc[mask & (updated["ExtraLedig"] == True), "Semester"] = False
             _sync_df_to_scenarios(updated)
             df = updated
 
