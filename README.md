@@ -43,4 +43,5 @@ streamlit run app.py
 ## Viktigt om hemligheter
 
 - `.streamlit/secrets.toml` är ignorerad via `.gitignore` och ska aldrig committas.
+- `.streamlit/secrets.toml.example` är medvetet committad som mall och ska inte innehålla riktiga hemligheter.
 - Om en private key redan har läckt (t.ex. i chat/loggar): rotera nyckeln i Google Cloud Console och ta bort den gamla.
