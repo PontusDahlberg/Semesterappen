@@ -563,6 +563,10 @@ with st.sidebar:
 
 st.title(f"Planerar: {st.session_state['current_scenario']}")
 
+if "budget_days" not in st.session_state:
+    st.session_state["budget_days"] = TOTAL_BUDGET
+st.number_input("Semesterbudget (dagar)", min_value=0, max_value=365, step=1, key="budget_days")
+
 current_records = st.session_state["scenarios"][st.session_state["current_scenario"]]
 if "data_store" not in st.session_state:
     st.session_state["data_store"] = {}
@@ -826,45 +830,46 @@ with st.expander("Årsöversikt 2026–2027"):
 # Statistik & Graf
 vacation_days = df[(df["Semester"] == True) & (df["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"]))]
 count = len(vacation_days)
-rem = TOTAL_BUDGET - count
+rem = st.session_state["budget_days"] - count
 
 st.markdown("---")
 c1, c2, c3 = st.columns(3)
-c1.metric("Budget", TOTAL_BUDGET)
+c1.metric("Budget", st.session_state["budget_days"])
 c2.metric("Planerat", count)
 c3.metric("Kvar", rem)
 
-viz_df = df.copy()
-viz_df["Kategori"] = viz_df.apply(
-    lambda r: "Semester"
-    if r["Semester"]
-    else (
-        "Sjuk"
-        if r.get("Sjuk", False)
+with st.expander("Tidslinje (översikt)"):
+    viz_df = df.copy()
+    viz_df["Kategori"] = viz_df.apply(
+        lambda r: "Semester"
+        if r["Semester"]
         else (
-            "Ledig (egen)"
-            if r.get("ExtraLedig", False)
-            else ("Helg" if "Ledig" in r["Typ"] else ("Spärrad" if "Spärrad" in r["Typ"] else "Jobb"))
-        )
-    ),
-    axis=1,
-)
-events = viz_df[viz_df["Kategori"] != "Jobb"].copy()
-
-if not events.empty:
-    fig = px.timeline(
-        events,
-        x_start="Datum",
-        x_end="Datum",
-        y="Kategori",
-        color="Kategori",
-        color_discrete_map={
-            "Semester": "#2ECC71",
-            "Helg": "#E74C3C",
-            "Spärrad": "#95A5A6",
-            "Ledig (egen)": "#3498DB",
-            "Sjuk": "#F1C40F",
-        },
+            "Sjuk"
+            if r.get("Sjuk", False)
+            else (
+                "Ledig (egen)"
+                if r.get("ExtraLedig", False)
+                else ("Helg" if "Ledig" in r["Typ"] else ("Spärrad" if "Spärrad" in r["Typ"] else "Jobb"))
+            )
+        ),
+        axis=1,
     )
-    fig.update_layout(xaxis_range=[START_DATE, END_DATE], height=300)
-    st.plotly_chart(fig, use_container_width=True)
+    events = viz_df[viz_df["Kategori"] != "Jobb"].copy()
+
+    if not events.empty:
+        fig = px.timeline(
+            events,
+            x_start="Datum",
+            x_end="Datum",
+            y="Kategori",
+            color="Kategori",
+            color_discrete_map={
+                "Semester": "#2ECC71",
+                "Helg": "#E74C3C",
+                "Spärrad": "#95A5A6",
+                "Ledig (egen)": "#3498DB",
+                "Sjuk": "#F1C40F",
+            },
+        )
+        fig.update_layout(xaxis_range=[START_DATE, END_DATE], height=300)
+        st.plotly_chart(fig, use_container_width=True)
