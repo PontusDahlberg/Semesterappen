@@ -550,14 +550,33 @@ def _apply_month_edits(editor_key: str, year: int, month: int) -> None:
     edited = st.session_state.get(editor_key)
     if edited is None:
         return
-    if not isinstance(edited, pd.DataFrame):
-        edited = pd.DataFrame(edited)
-    if edited.empty:
-        return
-    edited["Datum"] = pd.to_datetime(edited["Datum"]).dt.date
     updated = st.session_state["data_store"][scenario_key].copy()
     mask = updated["Datum"].apply(lambda d: d.year == year and d.month == month)
-    updated.loc[mask, ["Semester", "ExtraLedig", "Beskrivning"]] = edited[
+    month_df = updated.loc[mask].reset_index(drop=True)
+
+    if isinstance(edited, dict) and "edited_rows" in edited:
+        edited_rows = edited.get("edited_rows", {})
+        for row_idx, changes in edited_rows.items():
+            for col, val in changes.items():
+                month_df.at[int(row_idx), col] = val
+
+        added_rows = edited.get("added_rows", [])
+        if added_rows:
+            month_df = pd.concat([month_df, pd.DataFrame(added_rows)], ignore_index=True)
+
+        deleted_rows = edited.get("deleted_rows", [])
+        if deleted_rows:
+            month_df = month_df.drop(index=[int(i) for i in deleted_rows]).reset_index(drop=True)
+
+    elif isinstance(edited, pd.DataFrame):
+        if edited.empty:
+            return
+        month_df = edited.copy()
+    else:
+        return
+
+    month_df["Datum"] = pd.to_datetime(month_df["Datum"]).dt.date
+    updated.loc[mask, ["Semester", "ExtraLedig", "Beskrivning"]] = month_df[
         ["Semester", "ExtraLedig", "Beskrivning"]
     ].values
     _sync_df_to_scenarios(updated)
