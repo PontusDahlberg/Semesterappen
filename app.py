@@ -527,10 +527,40 @@ with st.sidebar:
 st.title(f"Planerar: {st.session_state['current_scenario']}")
 
 current_records = st.session_state["scenarios"][st.session_state["current_scenario"]]
-df = pd.DataFrame(current_records)
-df["Datum"] = pd.to_datetime(df["Datum"]).dt.date
-if "ExtraLedig" not in df.columns:
-    df["ExtraLedig"] = False
+if "data_store" not in st.session_state:
+    st.session_state["data_store"] = {}
+
+scenario_key = st.session_state["current_scenario"]
+if scenario_key not in st.session_state["data_store"]:
+    df_init = pd.DataFrame(current_records)
+    df_init["Datum"] = pd.to_datetime(df_init["Datum"]).dt.date
+    if "ExtraLedig" not in df_init.columns:
+        df_init["ExtraLedig"] = False
+    st.session_state["data_store"][scenario_key] = df_init
+
+df = st.session_state["data_store"][scenario_key]
+
+def _sync_df_to_scenarios(updated_df: pd.DataFrame) -> None:
+    save_df = updated_df.copy()
+    save_df["Datum"] = save_df["Datum"].astype(str)
+    st.session_state["scenarios"][scenario_key] = save_df.to_dict("records")
+    st.session_state["data_store"][scenario_key] = updated_df
+
+def _apply_month_edits(editor_key: str, year: int, month: int) -> None:
+    edited = st.session_state.get(editor_key)
+    if edited is None:
+        return
+    if not isinstance(edited, pd.DataFrame):
+        edited = pd.DataFrame(edited)
+    if edited.empty:
+        return
+    edited["Datum"] = pd.to_datetime(edited["Datum"]).dt.date
+    updated = st.session_state["data_store"][scenario_key].copy()
+    mask = updated["Datum"].apply(lambda d: d.year == year and d.month == month)
+    updated.loc[mask, ["Semester", "ExtraLedig", "Beskrivning"]] = edited[
+        ["Semester", "ExtraLedig", "Beskrivning"]
+    ].values
+    _sync_df_to_scenarios(updated)
 
 col1, col2 = st.columns(2)
 with col1:
@@ -552,7 +582,36 @@ with left:
         key="month_select",
     )
 
+    st.markdown("**Semesterperiod**")
+    period_col1, period_col2 = st.columns(2)
+    with period_col1:
+        start_date = st.date_input("Från och med", value=datetime.date(year, month, 1), key="period_start")
+    with period_col2:
+        end_date = st.date_input("Till och med", value=datetime.date(year, month, 1), key="period_end")
+    period_action = st.selectbox(
+        "Åtgärd",
+        ["Markera semester", "Ta bort semester"],
+        key="period_action",
+    )
+    if st.button("Applicera period", key="apply_period"):
+        if start_date > end_date:
+            st.error("Startdatum måste vara före slutdatum.")
+        else:
+            updated = df.copy()
+            mask = (updated["Datum"] >= start_date) & (updated["Datum"] <= end_date)
+            workday_mask = updated["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"])
+            if period_action == "Markera semester":
+                updated.loc[mask & workday_mask, "Semester"] = True
+            else:
+                updated.loc[mask & workday_mask, "Semester"] = False
+            _sync_df_to_scenarios(updated)
+            df = updated
+
     month_df = df[(pd.to_datetime(df["Datum"]).dt.year == year) & (pd.to_datetime(df["Datum"]).dt.month == month)].copy()
+    editor_key = f"editor_{st.session_state['current_scenario']}_{year}_{month}"
+    if editor_key not in st.session_state:
+        st.session_state[editor_key] = month_df
+
     edited_df = st.data_editor(
         month_df,
         column_config={
@@ -566,19 +625,12 @@ with left:
         disabled=["Datum", "Vecka", "Typ"],
         hide_index=True,
         height=420,
-        key=f"editor_{st.session_state['current_scenario']}_{year}_{month}",
+        key=editor_key,
+        on_change=_apply_month_edits,
+        args=(editor_key, year, month),
     )
 
-    if not edited_df.empty:
-        updated = df.copy()
-        updated_idx = updated[updated["Datum"].apply(lambda d: d.year == year and d.month == month)].index
-        updated.loc[updated_idx, ["Semester", "ExtraLedig", "Beskrivning"]] = edited_df[
-            ["Semester", "ExtraLedig", "Beskrivning"]
-        ].values
-        save_df = updated.copy()
-        save_df["Datum"] = save_df["Datum"].astype(str)
-        st.session_state["scenarios"][st.session_state["current_scenario"]] = save_df.to_dict("records")
-        df = updated
+    if isinstance(edited_df, pd.DataFrame) and not edited_df.empty:
         month_df = edited_df.copy()
 
 with right:
