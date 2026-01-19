@@ -589,6 +589,12 @@ def save_all_changes():
             st.toast("Sparat till molnet!", icon="✅")
 
 
+def _on_budget_change() -> None:
+    if not drive_enabled:
+        return
+    save_all_changes()
+
+
 def _shorten_holiday_name(name: str) -> str:
     name = name.strip()
     if not name:
@@ -683,7 +689,14 @@ st.title(f"Planerar: {st.session_state['current_scenario']}")
 
 if "budget_days" not in st.session_state:
     st.session_state["budget_days"] = TOTAL_BUDGET
-st.number_input("Semesterbudget (dagar)", min_value=0, max_value=365, step=1, key="budget_days")
+st.number_input(
+    "Semesterbudget (dagar)",
+    min_value=0,
+    max_value=365,
+    step=1,
+    key="budget_days",
+    on_change=_on_budget_change,
+)
 
 current_records = st.session_state["scenarios"][st.session_state["current_scenario"]]
 if "data_store" not in st.session_state:
@@ -1003,10 +1016,12 @@ with st.expander("Tidslinje (översikt)"):
     events = viz_df[viz_df["Kategori"] != "Jobb"].copy()
 
     if not events.empty:
+        events["Start"] = pd.to_datetime(events["Datum"])
+        events["End"] = events["Start"] + pd.Timedelta(days=1)
         fig = px.timeline(
             events,
-            x_start="Datum",
-            x_end="Datum",
+            x_start="Start",
+            x_end="End",
             y="Kategori",
             color="Kategori",
             color_discrete_map={
@@ -1019,3 +1034,5 @@ with st.expander("Tidslinje (översikt)"):
         )
         fig.update_layout(xaxis_range=[START_DATE, END_DATE], height=300)
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Inga händelser att visa ännu. Markera semester, ledigt eller sjukdagar.")
