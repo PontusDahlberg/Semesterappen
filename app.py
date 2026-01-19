@@ -220,7 +220,7 @@ def _get_gemini_api_key() -> str:
 
 def _gemini_model_name() -> str:
     name = str(st.secrets.get("gemini_model", "")).strip()
-    return name or "gemini-1.5-pro-latest"
+    return name or "gemini-1.5-flash"
 
 
 def _summarize_plan(df: pd.DataFrame, engine: "VacationEngine") -> str:
