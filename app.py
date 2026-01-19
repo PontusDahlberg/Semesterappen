@@ -8,7 +8,7 @@ import re
 import calendar
 import os
 from collections.abc import Mapping
-import google.generativeai as genai
+from openai import OpenAI
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -190,37 +190,34 @@ def _drive_status() -> tuple[bool, str, str]:
         return False, "", f"Kunde inte läsa secrets: {e}"
 
 
-def _gemini_enabled() -> bool:
-    return bool(_get_gemini_api_key())
+def _openai_enabled() -> bool:
+    return bool(_get_openai_api_key())
 
 
-def _get_gemini_api_key() -> str:
-    key = str(st.secrets.get("gemini_api_key", "")).strip()
+def _get_openai_api_key() -> str:
+    key = str(st.secrets.get("openai_api_key", "")).strip()
     if key:
         return key
-    key = str(st.secrets.get("GEMINI_API_KEY", "")).strip()
+    key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
     if key:
         return key
-    gemini_section = st.secrets.get("gemini", {})
-    if isinstance(gemini_section, Mapping):
-        key = str(gemini_section.get("api_key", "")).strip()
+    openai_section = st.secrets.get("openai", {})
+    if isinstance(openai_section, Mapping):
+        key = str(openai_section.get("api_key", "")).strip()
         if key:
             return key
-        key = str(gemini_section.get("key", "")).strip()
+        key = str(openai_section.get("key", "")).strip()
         if key:
             return key
-    key = str(os.environ.get("GEMINI_API_KEY", "")).strip()
-    if key:
-        return key
-    key = str(os.environ.get("GOOGLE_API_KEY", "")).strip()
+    key = str(os.environ.get("OPENAI_API_KEY", "")).strip()
     if key:
         return key
     return ""
 
 
-def _gemini_model_name() -> str:
-    name = str(st.secrets.get("gemini_model", "")).strip()
-    return name or "gemini-1.0-pro"
+def _openai_model_name() -> str:
+    name = str(st.secrets.get("openai_model", "")).strip()
+    return name or "gpt-4o-mini"
 
 
 def _summarize_plan(df: pd.DataFrame, engine: "VacationEngine") -> str:
@@ -271,16 +268,16 @@ def _summarize_plan(df: pd.DataFrame, engine: "VacationEngine") -> str:
     )
 
 
-def _generate_gemini_reply(user_message: str, df: pd.DataFrame, engine: "VacationEngine") -> str:
-    api_key = _get_gemini_api_key()
+def _generate_openai_reply(user_message: str, df: pd.DataFrame, engine: "VacationEngine") -> str:
+    api_key = _get_openai_api_key()
     if not api_key:
         return (
-            "Saknar gemini_api_key i secrets. "
-            "Säkerställ att den ligger på toppnivå i Streamlit Secrets eller som GEMINI_API_KEY/GOOGLE_API_KEY."
+            "Saknar openai_api_key i secrets. "
+            "Säkerställ att den ligger på toppnivå i Streamlit Secrets eller som OPENAI_API_KEY."
         )
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(_gemini_model_name())
+    client = OpenAI(api_key=api_key)
+    model = _openai_model_name()
 
     system_prompt = (
         "Du är en svensk semesterplaneringsassistent. "
@@ -290,15 +287,17 @@ def _generate_gemini_reply(user_message: str, df: pd.DataFrame, engine: "Vacatio
     )
     context = _summarize_plan(df, engine)
 
-    prompt = (
-        f"SYSTEM:\n{system_prompt}\n\n"
-        f"KONTEKST (aktuell plan):\n{context}\n\n"
-        f"ANVÄNDARE:\n{user_message}"
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"KONTEKST (aktuell plan):\n{context}"},
+            {"role": "user", "content": user_message},
+        ],
+        temperature=0.4,
     )
-
-    response = model.generate_content(prompt)
-    text = getattr(response, "text", "") or ""
-    return text.strip() or "Jag kunde inte generera ett svar just nu."
+    text = (response.choices[0].message.content or "").strip()
+    return text or "Jag kunde inte generera ett svar just nu."
 
 
 def _oauth_redirect_uri(client_dict: dict) -> str:
@@ -502,7 +501,7 @@ else:
     st.caption(f"Orsak: {drive_disabled_reason}")
     with st.expander("Felsök secrets (visar bara nyckelnamn)"):
         st.write(
-            "Förväntade nycklar: drive_folder_id, gcp_oauth_client (eller gcp_service_account), gemini_api_key"
+            "Förväntade nycklar: drive_folder_id, gcp_oauth_client (eller gcp_service_account), openai_api_key"
         )
         try:
             st.code("\n".join(sorted(list(st.secrets.keys()))))
@@ -749,10 +748,10 @@ if "ai_chat" not in st.session_state:
         }
     ]
 
-with st.popover("💬 AI‑agent", help="Kort, flytande chatt för semesterplanering"):
+with st.popover("💬 AI‑agent (OpenAI)", help="Kort, flytande chatt för semesterplanering"):
     st.caption("Tips: Fråga om långhelger, klämledighet eller förslag per månad.")
-    if not _gemini_enabled():
-        st.info("Lägg in gemini_api_key i secrets för att aktivera chatten.")
+    if not _openai_enabled():
+        st.info("Lägg in openai_api_key i secrets för att aktivera chatten.")
         st.caption("Nyckel hittad: nej")
     else:
         st.caption("Nyckel hittad: ja")
@@ -768,7 +767,7 @@ with st.popover("💬 AI‑agent", help="Kort, flytande chatt för semesterplane
     if send_clicked and user_prompt.strip():
         st.session_state["ai_chat"].append({"role": "user", "content": user_prompt.strip()})
         try:
-            reply = _generate_gemini_reply(user_prompt.strip(), df, engine)
+            reply = _generate_openai_reply(user_prompt.strip(), df, engine)
         except Exception as e:
             reply = f"Det uppstod ett fel: {e}"
         st.session_state["ai_chat"].append({"role": "assistant", "content": reply})
