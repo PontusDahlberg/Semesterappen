@@ -484,6 +484,7 @@ START_DATE = datetime.date(2026, 1, 1)
 END_DATE = datetime.date(2027, 10, 15)
 TOTAL_BUDGET = 108
 DB_FILENAME = "semester_databas.json"
+SETTINGS_FILENAME = "semester_settings.json"
 
 st.set_page_config(page_title="Semesterplaneraren (Drive Sync)", layout="wide")
 
@@ -565,9 +566,12 @@ if "scenarios" not in st.session_state:
     if drive_enabled:
         with st.spinner("Synkar med Google Drive..."):
             drive_data = load_from_drive(DB_FILENAME)
+            settings_data = load_from_drive(SETTINGS_FILENAME)
 
             if drive_data:
                 scenarios, budget_days = _extract_drive_payload(drive_data)
+                if isinstance(settings_data, dict) and "budget_days" in settings_data:
+                    budget_days = int(settings_data.get("budget_days", budget_days))
                 if not scenarios:
                     initial_df = engine.get_initial_data()
                     scenarios = {"Utkast 1": initial_df.to_dict("records")}
@@ -577,7 +581,10 @@ if "scenarios" not in st.session_state:
             else:
                 initial_df = engine.get_initial_data()
                 st.session_state["scenarios"] = {"Utkast 1": initial_df.to_dict("records")}
-                st.session_state["budget_days"] = TOTAL_BUDGET
+                if isinstance(settings_data, dict) and "budget_days" in settings_data:
+                    st.session_state["budget_days"] = int(settings_data.get("budget_days", TOTAL_BUDGET))
+                else:
+                    st.session_state["budget_days"] = TOTAL_BUDGET
                 st.toast("Ingen data på Drive, skapade nytt utkast.", icon="🆕")
     else:
         initial_df = engine.get_initial_data()
@@ -611,8 +618,14 @@ def save_all_changes():
             },
         }
         success = save_to_drive(DB_FILENAME, payload)
-        if success:
+        settings_success = save_to_drive(
+            SETTINGS_FILENAME,
+            {"budget_days": int(st.session_state.get("budget_days", TOTAL_BUDGET))},
+        )
+        if success and settings_success:
             st.toast("Sparat till molnet!", icon="✅")
+        elif success and not settings_success:
+            st.warning("Sparade data men kunde inte spara inställningar.")
 
 
 def _on_budget_change() -> None:
