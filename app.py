@@ -191,7 +191,31 @@ def _drive_status() -> tuple[bool, str, str]:
 
 
 def _gemini_enabled() -> bool:
-    return bool(str(st.secrets.get("gemini_api_key", "")).strip())
+    return bool(_get_gemini_api_key())
+
+
+def _get_gemini_api_key() -> str:
+    key = str(st.secrets.get("gemini_api_key", "")).strip()
+    if key:
+        return key
+    key = str(st.secrets.get("GEMINI_API_KEY", "")).strip()
+    if key:
+        return key
+    gemini_section = st.secrets.get("gemini", {})
+    if isinstance(gemini_section, Mapping):
+        key = str(gemini_section.get("api_key", "")).strip()
+        if key:
+            return key
+        key = str(gemini_section.get("key", "")).strip()
+        if key:
+            return key
+    key = str(os.environ.get("GEMINI_API_KEY", "")).strip()
+    if key:
+        return key
+    key = str(os.environ.get("GOOGLE_API_KEY", "")).strip()
+    if key:
+        return key
+    return ""
 
 
 def _gemini_model_name() -> str:
@@ -248,9 +272,12 @@ def _summarize_plan(df: pd.DataFrame, engine: "VacationEngine") -> str:
 
 
 def _generate_gemini_reply(user_message: str, df: pd.DataFrame, engine: "VacationEngine") -> str:
-    api_key = str(st.secrets.get("gemini_api_key", "")).strip()
+    api_key = _get_gemini_api_key()
     if not api_key:
-        return "Saknar gemini_api_key i secrets."
+        return (
+            "Saknar gemini_api_key i secrets. "
+            "Säkerställ att den ligger på toppnivå i Streamlit Secrets eller som GEMINI_API_KEY/GOOGLE_API_KEY."
+        )
 
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(_gemini_model_name())
@@ -726,6 +753,9 @@ with st.popover("💬 AI‑agent", help="Kort, flytande chatt för semesterplane
     st.caption("Tips: Fråga om långhelger, klämledighet eller förslag per månad.")
     if not _gemini_enabled():
         st.info("Lägg in gemini_api_key i secrets för att aktivera chatten.")
+        st.caption("Nyckel hittad: nej")
+    else:
+        st.caption("Nyckel hittad: ja")
 
     for msg in st.session_state["ai_chat"]:
         with st.chat_message(msg["role"]):
