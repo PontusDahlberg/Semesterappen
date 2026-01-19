@@ -223,8 +223,9 @@ def _openai_model_name() -> str:
 def _summarize_plan(df: pd.DataFrame, engine: "VacationEngine") -> str:
     today = datetime.date.today()
     plan_mask = (df["Semester"] == True) & (df["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"]))
-    planned = int(plan_mask.sum())
-    remaining = int(st.session_state.get("budget_days", TOTAL_BUDGET) - planned)
+    half_mask = (df.get("Halvdag", False) == True) & (df["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"]))
+    planned = float(plan_mask.sum()) + 0.5 * float(half_mask.sum())
+    remaining = float(st.session_state.get("budget_days", TOTAL_BUDGET)) - planned
 
     upcoming_plan = (
         df.loc[plan_mask & (df["Datum"] >= today)]
@@ -235,15 +236,18 @@ def _summarize_plan(df: pd.DataFrame, engine: "VacationEngine") -> str:
     if not upcoming_plan.empty:
         next_plan = upcoming_plan.iloc[0]["Datum"].strftime("%Y-%m-%d")
 
+    month_df = df.copy()
+    month_df["BudgetDays"] = 0.0
+    month_df.loc[plan_mask, "BudgetDays"] = 1.0
+    month_df.loc[half_mask, "BudgetDays"] = 0.5
     month_counts = (
-        df.loc[plan_mask]
-        .assign(Month=lambda d: pd.to_datetime(d["Datum"]).dt.month)
-        .groupby("Month")
-        .size()
+        month_df.assign(Month=lambda d: pd.to_datetime(d["Datum"]).dt.month)
+        .groupby("Month")["BudgetDays"]
+        .sum()
         .sort_values(ascending=False)
         .head(3)
     )
-    top_months = ", ".join([f"{MONTH_NAMES[m - 1]} ({int(c)})" for m, c in month_counts.items()])
+    top_months = ", ".join([f"{MONTH_NAMES[m - 1]} ({c:.1f})" for m, c in month_counts.items()])
     if not top_months:
         top_months = "Inga planerade dagar ännu"
 
@@ -260,8 +264,8 @@ def _summarize_plan(df: pd.DataFrame, engine: "VacationEngine") -> str:
 
     return (
         f"Budget: {st.session_state.get('budget_days', TOTAL_BUDGET)} dagar\n"
-        f"Planerat: {planned} dagar\n"
-        f"Kvar: {remaining} dagar\n"
+        f"Planerat: {planned:.1f} dagar\n"
+        f"Kvar: {remaining:.1f} dagar\n"
         f"Toppmånader: {top_months}\n"
         f"Nästa planerade semesterdag: {next_plan or 'Ingen'}\n"
         f"Kommande helgdagar:\n{holidays_text}"
@@ -552,6 +556,7 @@ class VacationEngine:
                     "Typ": day_type,
                     "Beskrivning": details,
                     "Semester": False,
+                    "Halvdag": False,
                     "ExtraLedig": False,
                     "Sjuk": False,
                 }
@@ -749,9 +754,14 @@ if scenario_key not in st.session_state["data_store"]:
         df_init["ExtraLedig"] = False
     if "Sjuk" not in df_init.columns:
         df_init["Sjuk"] = False
+    if "Halvdag" not in df_init.columns:
+        df_init["Halvdag"] = False
     st.session_state["data_store"][scenario_key] = df_init
 
 df = st.session_state["data_store"][scenario_key]
+if "Halvdag" not in df.columns:
+    df["Halvdag"] = False
+    st.session_state["data_store"][scenario_key] = df
 
 if "ai_chat" not in st.session_state:
     st.session_state["ai_chat"] = [
@@ -824,9 +834,14 @@ def _apply_month_edits(editor_key: str, year: int, month: int) -> None:
     month_df["Datum"] = pd.to_datetime(month_df["Datum"]).dt.date
     month_df.loc[month_df["ExtraLedig"] == True, "Semester"] = False
     month_df.loc[month_df["Sjuk"] == True, "Semester"] = False
+    month_df.loc[month_df["Halvdag"] == True, "Semester"] = False
+    month_df.loc[month_df["Halvdag"] == True, "ExtraLedig"] = False
+    month_df.loc[month_df["Halvdag"] == True, "Sjuk"] = False
+    month_df.loc[month_df["Semester"] == True, "Halvdag"] = False
     updated.loc[mask, ["Semester", "ExtraLedig", "Sjuk", "Beskrivning"]] = month_df[
         ["Semester", "ExtraLedig", "Sjuk", "Beskrivning"]
     ].values
+    updated.loc[mask, ["Halvdag"]] = month_df[["Halvdag"]].values
     _sync_df_to_scenarios(updated)
 
 col1, col2 = st.columns(2)
@@ -878,6 +893,7 @@ with left:
                     mask & workday_mask & (updated["ExtraLedig"] != True) & (updated["Sjuk"] != True),
                     "Semester",
                 ] = True
+                updated.loc[mask & workday_mask, "Halvdag"] = False
             else:
                 updated.loc[mask & workday_mask, "Semester"] = False
             updated.loc[mask & (updated["ExtraLedig"] == True), "Semester"] = False
@@ -894,6 +910,7 @@ with left:
             "Vecka": st.column_config.NumberColumn("Vecka", width="small"),
             "Typ": st.column_config.TextColumn("Typ", width="small"),
             "Semester": st.column_config.CheckboxColumn("Sem", width="small"),
+            "Halvdag": st.column_config.CheckboxColumn("Halv", width="small"),
             "ExtraLedig": st.column_config.CheckboxColumn("Ledig", width="small"),
             "Sjuk": st.column_config.CheckboxColumn("Sjuk", width="small"),
             "Beskrivning": st.column_config.TextColumn("Notering", width="small"),
@@ -932,6 +949,7 @@ with right:
             is_semester = bool(info["Semester"]) if info is not None else False
             is_extra_ledig = bool(info.get("ExtraLedig", False)) if info is not None else False
             is_sick = bool(info.get("Sjuk", False)) if info is not None else False
+            is_halfday = bool(info.get("Halvdag", False)) if info is not None else False
             holiday_name = str(info.get("Beskrivning", "")).strip() if info is not None else ""
             if day in engine.se_holidays:
                 holiday_name = str(engine.se_holidays.get(day)).strip()
@@ -951,6 +969,9 @@ with right:
             elif is_extra_ledig:
                 status = "ledig"
                 label += " 🏖️"
+            elif is_halfday:
+                status = "halvdag"
+                label += " 🌓"
             if "Spärrad" in typ and status == "jobb":
                 status = "spärr"
                 label += " ⛔"
@@ -975,6 +996,7 @@ with right:
                 "helg": "#FADBD8",
                 "sjuk": "#F9E79F",
                 "ledig": "#D6EAF8",
+                "halvdag": "#E8DAEF",
                 "spärr": "#E5E7E9",
                 "text": "#111111",
                 "out": "#AAB7B8",
@@ -985,6 +1007,7 @@ with right:
                 "helg": "#922B21",
                 "sjuk": "#7D6608",
                 "ledig": "#21618C",
+                "halvdag": "#6C3483",
                 "spärr": "#424949",
                 "text": "#F2F4F4",
                 "out": "#566573",
@@ -1000,6 +1023,8 @@ with right:
                     styles.iat[i, j] = f"background-color: {colors['sjuk']}; color: {colors['text']};"
                 elif status == "ledig":
                     styles.iat[i, j] = f"background-color: {colors['ledig']}; color: {colors['text']};"
+                elif status == "halvdag":
+                    styles.iat[i, j] = f"background-color: {colors['halvdag']}; color: {colors['text']};"
                 elif status == "spärr":
                     styles.iat[i, j] = f"background-color: {colors['spärr']}; color: {colors['text']};"
                 elif status == "out":
@@ -1007,23 +1032,31 @@ with right:
         return styles
 
     st.dataframe(cal_df.style.apply(_style_calendar, axis=None), use_container_width=True, height=240)
-    st.caption("Legend: 🌴 semester (arbetsdag), 🎉 helg/röd dag, 🤒 sjuk, 🏖️ ledig (ej semester), ⛔ spärrad fredag.")
+    st.caption("Legend: 🌴 semester (arbetsdag), 🌓 halvdag, 🎉 helg/röd dag, 🤒 sjuk, 🏖️ ledig (ej semester), ⛔ spärrad fredag.")
 
 with st.expander("Årsöversikt 2026–2027"):
     df_calc = df.copy()
     df_calc["Year"] = pd.to_datetime(df_calc["Datum"]).dt.year
     df_calc["Month"] = pd.to_datetime(df_calc["Datum"]).dt.month
-    vacation_mask = (
-        (df_calc["Semester"] == True) & (df_calc["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"]))
+    full_mask = (df_calc["Semester"] == True) & (df_calc["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"]))
+    half_mask = (df_calc.get("Halvdag", False) == True) & (
+        df_calc["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"])
     )
-    monthly = df_calc[vacation_mask].groupby(["Year", "Month"]).size().reset_index(name="Planerade dagar")
+    df_calc["BudgetDays"] = 0.0
+    df_calc.loc[full_mask, "BudgetDays"] = 1.0
+    df_calc.loc[half_mask, "BudgetDays"] = 0.5
+    monthly = (
+        df_calc.groupby(["Year", "Month"])["BudgetDays"]
+        .sum()
+        .reset_index(name="Planerade dagar")
+    )
     month_index = list(range(1, 13))
     month_labels = {i: MONTH_NAMES[i - 1] for i in month_index}
     monthly_pivot = (
         monthly.pivot(index="Month", columns="Year", values="Planerade dagar")
         .reindex(month_index)
         .fillna(0)
-        .astype(int)
+        .round(1)
     )
     monthly_pivot.index = [month_labels[i] for i in month_index]
 
@@ -1031,15 +1064,16 @@ with st.expander("Årsöversikt 2026–2027"):
     st.bar_chart(monthly_pivot, height=200)
 
 # Statistik & Graf
-vacation_days = df[(df["Semester"] == True) & (df["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"]))]
-count = len(vacation_days)
-rem = st.session_state["budget_days"] - count
+full_mask = (df["Semester"] == True) & (df["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"]))
+half_mask = (df.get("Halvdag", False) == True) & (df["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"]))
+count = float(full_mask.sum()) + 0.5 * float(half_mask.sum())
+rem = float(st.session_state["budget_days"]) - count
 
 st.markdown("---")
 c1, c2, c3 = st.columns(3)
 c1.metric("Budget", st.session_state["budget_days"])
-c2.metric("Planerat", count)
-c3.metric("Kvar", rem)
+c2.metric("Planerat", f"{count:.1f}")
+c3.metric("Kvar", f"{rem:.1f}")
 
 with st.expander("Tidslinje (översikt)"):
     viz_df = df.copy()
@@ -1047,6 +1081,9 @@ with st.expander("Tidslinje (översikt)"):
         lambda r: "Semester"
         if r["Semester"]
         else (
+            "Halvdag"
+            if r.get("Halvdag", False)
+            else (
             "Sjuk"
             if r.get("Sjuk", False)
             else (
@@ -1054,7 +1091,7 @@ with st.expander("Tidslinje (översikt)"):
                 if r.get("ExtraLedig", False)
                 else ("Helg" if "Ledig" in r["Typ"] else ("Spärrad" if "Spärrad" in r["Typ"] else "Jobb"))
             )
-        ),
+        )),
         axis=1,
     )
     events = viz_df[viz_df["Kategori"] != "Jobb"].copy()
@@ -1062,6 +1099,8 @@ with st.expander("Tidslinje (översikt)"):
     if not events.empty:
         events["Start"] = pd.to_datetime(events["Datum"])
         events["End"] = events["Start"] + pd.Timedelta(days=1)
+        half_mask = events["Kategori"] == "Halvdag"
+        events.loc[half_mask, "End"] = events.loc[half_mask, "Start"] + pd.Timedelta(hours=12)
         fig = px.timeline(
             events,
             x_start="Start",
@@ -1070,6 +1109,7 @@ with st.expander("Tidslinje (översikt)"):
             color="Kategori",
             color_discrete_map={
                 "Semester": "#2ECC71",
+                "Halvdag": "#9B59B6",
                 "Helg": "#E74C3C",
                 "Spärrad": "#95A5A6",
                 "Ledig (egen)": "#3498DB",
