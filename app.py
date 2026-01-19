@@ -8,6 +8,7 @@ import re
 import calendar
 import os
 from collections.abc import Mapping
+import google.generativeai as genai
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -189,6 +190,90 @@ def _drive_status() -> tuple[bool, str, str]:
         return False, "", f"Kunde inte läsa secrets: {e}"
 
 
+def _gemini_enabled() -> bool:
+    return bool(str(st.secrets.get("gemini_api_key", "")).strip())
+
+
+def _gemini_model_name() -> str:
+    name = str(st.secrets.get("gemini_model", "")).strip()
+    return name or "gemini-1.5-pro-latest"
+
+
+def _summarize_plan(df: pd.DataFrame, engine: "VacationEngine") -> str:
+    today = datetime.date.today()
+    plan_mask = (df["Semester"] == True) & (df["Typ"].isin(["Arbetsdag", "Spärrad (Jobb)"]))
+    planned = int(plan_mask.sum())
+    remaining = int(st.session_state.get("budget_days", TOTAL_BUDGET) - planned)
+
+    upcoming_plan = (
+        df.loc[plan_mask & (df["Datum"] >= today)]
+        .sort_values("Datum")
+        .head(1)
+    )
+    next_plan = ""
+    if not upcoming_plan.empty:
+        next_plan = upcoming_plan.iloc[0]["Datum"].strftime("%Y-%m-%d")
+
+    month_counts = (
+        df.loc[plan_mask]
+        .assign(Month=lambda d: pd.to_datetime(d["Datum"]).dt.month)
+        .groupby("Month")
+        .size()
+        .sort_values(ascending=False)
+        .head(3)
+    )
+    top_months = ", ".join([f"{MONTH_NAMES[m - 1]} ({int(c)})" for m, c in month_counts.items()])
+    if not top_months:
+        top_months = "Inga planerade dagar ännu"
+
+    # Kommande röda dagar/helgdagar
+    upcoming_holidays = []
+    for day in pd.date_range(start=today, end=END_DATE).to_pydatetime():
+        d = day.date()
+        if d in engine.se_holidays:
+            upcoming_holidays.append(f"{d.strftime('%Y-%m-%d')}: {engine.se_holidays.get(d)}")
+        if len(upcoming_holidays) >= 5:
+            break
+
+    holidays_text = "\n".join(upcoming_holidays) if upcoming_holidays else "Inga kommande helgdagar hittades."
+
+    return (
+        f"Budget: {st.session_state.get('budget_days', TOTAL_BUDGET)} dagar\n"
+        f"Planerat: {planned} dagar\n"
+        f"Kvar: {remaining} dagar\n"
+        f"Toppmånader: {top_months}\n"
+        f"Nästa planerade semesterdag: {next_plan or 'Ingen'}\n"
+        f"Kommande helgdagar:\n{holidays_text}"
+    )
+
+
+def _generate_gemini_reply(user_message: str, df: pd.DataFrame, engine: "VacationEngine") -> str:
+    api_key = str(st.secrets.get("gemini_api_key", "")).strip()
+    if not api_key:
+        return "Saknar gemini_api_key i secrets."
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(_gemini_model_name())
+
+    system_prompt = (
+        "Du är en svensk semesterplaneringsassistent. "
+        "Ge konkreta, korta och praktiska råd. "
+        "Fokusera på att maximera sammanhängande ledighet med minimal semesteråtgång. "
+        "Om information saknas, ställ en kort följdfråga."
+    )
+    context = _summarize_plan(df, engine)
+
+    prompt = (
+        f"SYSTEM:\n{system_prompt}\n\n"
+        f"KONTEKST (aktuell plan):\n{context}\n\n"
+        f"ANVÄNDARE:\n{user_message}"
+    )
+
+    response = model.generate_content(prompt)
+    text = getattr(response, "text", "") or ""
+    return text.strip() or "Jag kunde inte generera ett svar just nu."
+
+
 def _oauth_redirect_uri(client_dict: dict) -> str:
     redirect_uri = str(st.secrets.get("oauth_redirect_uri", "")).strip()
     if redirect_uri:
@@ -352,6 +437,22 @@ def save_to_drive(filename, data_dict):
         return False
 
 
+def _extract_drive_payload(drive_data) -> tuple[dict, int]:
+    """Returnerar (scenarios, budget_days) från Drive‑data. Hanterar äldre format."""
+    if not isinstance(drive_data, dict):
+        return {}, TOTAL_BUDGET
+
+    # Nytt format: {"scenarios": {...}, "settings": {"budget_days": 123}}
+    if "scenarios" in drive_data:
+        scenarios = drive_data.get("scenarios") or {}
+        settings = drive_data.get("settings") or {}
+        budget_days = int(settings.get("budget_days", TOTAL_BUDGET))
+        return scenarios, budget_days
+
+    # Äldre format: {"Scenario A": [...], "Scenario B": [...]}
+    return drive_data, TOTAL_BUDGET
+
+
 # --- GRUNDINSTÄLLNINGAR ---
 START_DATE = datetime.date(2026, 1, 1)
 END_DATE = datetime.date(2027, 10, 15)
@@ -373,7 +474,9 @@ else:
     st.warning("Drive-sync: Inaktiv")
     st.caption(f"Orsak: {drive_disabled_reason}")
     with st.expander("Felsök secrets (visar bara nyckelnamn)"):
-        st.write("Förväntade nycklar: drive_folder_id, gcp_oauth_client (eller gcp_service_account)")
+        st.write(
+            "Förväntade nycklar: drive_folder_id, gcp_oauth_client (eller gcp_service_account), gemini_api_key"
+        )
         try:
             st.code("\n".join(sorted(list(st.secrets.keys()))))
             gcp_val = st.secrets.get("gcp_service_account", None)
@@ -438,15 +541,22 @@ if "scenarios" not in st.session_state:
             drive_data = load_from_drive(DB_FILENAME)
 
             if drive_data:
-                st.session_state["scenarios"] = drive_data
+                scenarios, budget_days = _extract_drive_payload(drive_data)
+                if not scenarios:
+                    initial_df = engine.get_initial_data()
+                    scenarios = {"Utkast 1": initial_df.to_dict("records")}
+                st.session_state["scenarios"] = scenarios
+                st.session_state["budget_days"] = budget_days
                 st.toast("Data laddad från Drive!", icon="☁️")
             else:
                 initial_df = engine.get_initial_data()
                 st.session_state["scenarios"] = {"Utkast 1": initial_df.to_dict("records")}
+                st.session_state["budget_days"] = TOTAL_BUDGET
                 st.toast("Ingen data på Drive, skapade nytt utkast.", icon="🆕")
     else:
         initial_df = engine.get_initial_data()
         st.session_state["scenarios"] = {"Utkast 1": initial_df.to_dict("records")}
+        st.session_state["budget_days"] = TOTAL_BUDGET
 
     first_key = list(st.session_state["scenarios"].keys())[0]
     st.session_state["current_scenario"] = first_key
@@ -468,7 +578,13 @@ def save_all_changes():
         )
         return
     with st.spinner("Sparar till Drive..."):
-        success = save_to_drive(DB_FILENAME, st.session_state["scenarios"])
+        payload = {
+            "scenarios": st.session_state["scenarios"],
+            "settings": {
+                "budget_days": int(st.session_state.get("budget_days", TOTAL_BUDGET)),
+            },
+        }
+        success = save_to_drive(DB_FILENAME, payload)
         if success:
             st.toast("Sparat till molnet!", icon="✅")
 
@@ -524,7 +640,9 @@ with st.sidebar:
         st.warning("Drive-sync: Inaktiv")
         st.caption(f"Orsak: {drive_disabled_reason}")
         with st.expander("Felsök secrets (visar bara nyckelnamn)"):
-            st.write("Förväntade nycklar: drive_folder_id, gcp_oauth_client (eller gcp_service_account)")
+            st.write(
+                "Förväntade nycklar: drive_folder_id, gcp_oauth_client (eller gcp_service_account), gemini_api_key"
+            )
             st.write("Nycklar som Streamlit ser:")
             try:
                 st.code("\n".join(sorted(list(st.secrets.keys()))))
@@ -582,6 +700,34 @@ if scenario_key not in st.session_state["data_store"]:
     st.session_state["data_store"][scenario_key] = df_init
 
 df = st.session_state["data_store"][scenario_key]
+
+if "ai_chat" not in st.session_state:
+    st.session_state["ai_chat"] = [
+        {
+            "role": "assistant",
+            "content": "Hej! Fråga mig om bästa sättet att lägga semesterdagar för lång ledighet.",
+        }
+    ]
+
+with st.popover("💬 AI‑agent", help="Kort, flytande chatt för semesterplanering"):
+    st.caption("Tips: Fråga om långhelger, klämledighet eller förslag per månad.")
+    if not _gemini_enabled():
+        st.info("Lägg in gemini_api_key i secrets för att aktivera chatten.")
+
+    for msg in st.session_state["ai_chat"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    user_prompt = st.text_area("Skriv din fråga", key="ai_prompt", height=80)
+    if st.button("Skicka", key="ai_send") and user_prompt.strip():
+        st.session_state["ai_chat"].append({"role": "user", "content": user_prompt.strip()})
+        try:
+            reply = _generate_gemini_reply(user_prompt.strip(), df, engine)
+        except Exception as e:
+            reply = f"Det uppstod ett fel: {e}"
+        st.session_state["ai_chat"].append({"role": "assistant", "content": reply})
+        st.session_state["ai_prompt"] = ""
+        st.rerun()
 
 def _sync_df_to_scenarios(updated_df: pd.DataFrame) -> None:
     save_df = updated_df.copy()
