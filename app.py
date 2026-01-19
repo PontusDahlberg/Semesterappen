@@ -731,15 +731,17 @@ with st.popover("💬 AI‑agent", help="Kort, flytande chatt för semesterplane
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    user_prompt = st.text_area("Skriv din fråga", key="ai_prompt", height=80)
-    if st.button("Skicka", key="ai_send") and user_prompt.strip():
+    with st.form("ai_form", clear_on_submit=True):
+        user_prompt = st.text_area("Skriv din fråga", key="ai_prompt", height=80)
+        send_clicked = st.form_submit_button("Skicka")
+
+    if send_clicked and user_prompt.strip():
         st.session_state["ai_chat"].append({"role": "user", "content": user_prompt.strip()})
         try:
             reply = _generate_gemini_reply(user_prompt.strip(), df, engine)
         except Exception as e:
             reply = f"Det uppstod ett fel: {e}"
         st.session_state["ai_chat"].append({"role": "assistant", "content": reply})
-        st.session_state["ai_prompt"] = ""
         st.rerun()
 
 def _sync_df_to_scenarios(updated_df: pd.DataFrame) -> None:
